@@ -25,12 +25,22 @@
 
 package java.util.zip;
 
-import java.io.*;
+import java.io.Closeable;
+import java.io.EOFException;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
 import java.lang.ref.Cleaner.Cleanable;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
-import java.nio.file.*;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.OpenOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -55,6 +65,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
+import com.sun.nio.file.ExtendedOpenOption;
 import jdk.internal.access.JavaUtilZipFileAccess;
 import jdk.internal.access.JavaUtilJarAccess;
 import jdk.internal.access.SharedSecrets;
@@ -1629,13 +1640,17 @@ public class ZipFile implements ZipConstants, Closeable {
             this.zc = zc;
             this.key = key;
             if (USE_NIO_FOR_ZIP_FILE_ACCESS) {
-                Set<OpenOption> options;
+                List<OpenOption> options = new ArrayList<>(OperatingSystem.isWindows() ? 3 : 2);
+                options.add(StandardOpenOption.READ);
                 if (toDelete) {
-                    options = Set.of(StandardOpenOption.READ, StandardOpenOption.DELETE_ON_CLOSE);
-                } else {
-                    options = Set.of(StandardOpenOption.READ);
+                    options.add(StandardOpenOption.DELETE_ON_CLOSE);
                 }
-                FileChannel channel = FileSystems.getDefault().provider().newFileChannel(key.file.toPath(), options);
+                if (OperatingSystem.isWindows()) {
+                    // RandomAccessFile opens a file without FILE_SHARE_DELETE.
+                    // We would like to preserve compatibility with the old behavior.
+                    options.add(ExtendedOpenOption.NOSHARE_DELETE);
+                }
+                FileChannel channel = FileSystems.getDefault().provider().newFileChannel(key.file.toPath(), Set.copyOf(options));
                 if (channel instanceof FileChannelImpl) {
                     ((FileChannelImpl) channel).setUninterruptible();
                 }
