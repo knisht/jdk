@@ -34,6 +34,8 @@
  * @run driver RedefineSharedClassJFR xshare-off
  * @run driver RedefineSharedClassJFR xshare-on
  */
+import java.io.InputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 

@@ -33,8 +33,12 @@ import java.io.File;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
 import java.lang.ref.Cleaner.Cleanable;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
+import java.nio.file.FileSystems;
 import java.nio.file.InvalidPathException;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.Files;
 import java.util.ArrayDeque;
@@ -67,6 +71,7 @@ import jdk.internal.util.OperatingSystem;
 import jdk.internal.perf.PerfCounter;
 import jdk.internal.ref.CleanerFactory;
 import jdk.internal.vm.annotation.Stable;
+import sun.nio.ch.FileChannelImpl;
 import sun.nio.cs.UTF_8;
 import sun.nio.fs.DefaultFileSystemProvider;
 import sun.security.action.GetPropertyAction;
@@ -1170,7 +1175,7 @@ public class ZipFile implements ZipConstants, Closeable {
 
         private int refs = 1;
 
-        private RandomAccessFile zfile;      // zfile of the underlying zip file
+        private FileChannel zfile;           // zfile of the underlying ZIP file
         private byte[] cen;                  // CEN & ENDHDR
         private long locpos;                 // position of first LOC header (usually 0)
         private byte[] comment;              // zip file comment
@@ -1481,15 +1486,14 @@ public class ZipFile implements ZipConstants, Closeable {
             this.zc = zc;
             this.key = key;
             if (toDelete) {
-                if (OperatingSystem.isWindows()) {
-                    this.zfile = SharedSecrets.getJavaIORandomAccessFileAccess()
-                                              .openAndDelete(key.file, "r");
-                } else {
-                    this.zfile = new RandomAccessFile(key.file, "r");
-                    key.file.delete();
-                }
+                this.zfile = FileSystems.getDefault().provider()
+                        .newFileChannel(key.file.toPath(), Set.of(StandardOpenOption.READ, StandardOpenOption.DELETE_ON_CLOSE));
             } else {
-                this.zfile = new RandomAccessFile(key.file, "r");
+                this.zfile = FileSystems.getDefault().provider()
+                        .newFileChannel(key.file.toPath(), Set.of(StandardOpenOption.READ));
+            }
+            if (this.zfile instanceof FileChannelImpl) {
+                ((FileChannelImpl) this.zfile).setUninterruptible();
             }
             try {
                 initCEN(-1);
@@ -1521,11 +1525,12 @@ public class ZipFile implements ZipConstants, Closeable {
             throws IOException
         {
             synchronized (zfile) {
-                zfile.seek(pos);
+                zfile.position(pos);
                 int N = len;
                 while (N > 0) {
                     int n = Math.min(BUF_SIZE, N);
-                    zfile.readFully(buf, off, n);
+                    ByteBuffer byteBuffer = ByteBuffer.wrap(buf, off, n);
+                    zfile.read(byteBuffer);
                     off += n;
                     N -= n;
                 }
@@ -1537,8 +1542,9 @@ public class ZipFile implements ZipConstants, Closeable {
             throws IOException
         {
             synchronized (zfile) {
-                zfile.seek(pos);
-                return zfile.read(buf, off, len);
+                zfile.position(pos);
+                ByteBuffer byteBuffer = ByteBuffer.wrap(buf, off, len);
+                return zfile.read(byteBuffer);
             }
         }
 
@@ -1557,7 +1563,7 @@ public class ZipFile implements ZipConstants, Closeable {
          * was not found or an error occurred.
          */
         private End findEND() throws IOException {
-            long ziplen = zfile.length();
+            long ziplen = zfile.size();
             if (ziplen <= 0)
                 zerror("zip file is empty");
             End end = new End();
